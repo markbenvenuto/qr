@@ -21,15 +21,25 @@ use std::fs::{self, DirEntry};
 use std::path::Path;
 // use std::path::PathBuf;
 use lazy_static::lazy_static;
-use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::Arc;
 use std::os::unix::prelude::FileExt;
+use dashmap::{DashMap};
+use actix_http;
+
+use tokio::time::{delay_for, Duration};
+use urandom::distributions::{Distribution, Uniform};
+// use urandom::urandom;
+use urandom::Random;
 
 lazy_static! {
     static ref ROOT_PATH: String = "/data/db/".to_string();
     static ref ROOT_PREFIX: String = "qr/".to_string();
-    static ref FILE_MAP: Mutex<HashMap<String, Arc<Mutex<std::fs::File>>> > = Mutex::new(HashMap::new());
+    static ref FILE_MAP: DashMap<String, Arc<RwLock<std::fs::File>>> = DashMap::new();
+
+    static ref GLOBAL_RAND: Mutex< Random<urandom::rng::SplitMix64>> = Mutex::new(urandom::rng::SplitMix64::new());
+    static ref GLOBAL_DIST: Mutex< Uniform<u64>> = Mutex::new(Uniform::from(100..1000));
 }
 
 
@@ -58,7 +68,7 @@ async fn os_read(info: web::Query<OsReadInfo>) -> impl Responder {
 
 
     // let fh = Arc::new(Mutex::new(file.unwrap()));
-    let fh_opt =FILE_MAP.lock().unwrap().get(&info.filename).map(|x| x.clone());
+    let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
     let fh = if fh_opt.is_none() {
         warn!("Cannot find in map {:?}", info.filename);
 
@@ -85,8 +95,8 @@ async fn os_read(info: web::Query<OsReadInfo>) -> impl Responder {
         let f2 = file.unwrap();
         println!("len: {:?}", f2.metadata().unwrap().len());
 
-        let fh = Arc::new(Mutex::new(f2));
-        FILE_MAP.lock().unwrap().insert(info.filename.to_string(), fh.clone());
+        let fh = Arc::new(RwLock::new(f2));
+        FILE_MAP.insert(info.filename.to_string(), fh.clone());
         fh
     } else {
          fh_opt.unwrap()
@@ -97,7 +107,7 @@ async fn os_read(info: web::Query<OsReadInfo>) -> impl Responder {
     buf.resize(info.length as usize, 0);
 
     let off = info.offset as u64;
-    let guard = fh.lock().unwrap();
+    let guard = fh.read().unwrap();
 
     let r = guard.read_at(&mut buf, off);
     if r.is_err() {
@@ -106,7 +116,13 @@ async fn os_read(info: web::Query<OsReadInfo>) -> impl Responder {
     }
 
     let rs = r.unwrap();
-    info!("Read {:?} bytes", rs);
+    // info!("Read {:?} bytes", rs);
+
+    // let delay_mills: u64 = {
+    // let mut rand =GLOBAL_RAND.lock().unwrap();
+    // GLOBAL_DIST.lock().unwrap().sample(&mut *rand)
+    // };
+    // delay_for(Duration::from_millis(delay_mills)).await;
 
     HttpResponse::Ok().body(web::Bytes::copy_from_slice(buf.as_slice()))
 }
@@ -118,7 +134,7 @@ async fn os_read(info: web::Query<OsReadInfo>) -> impl Responder {
 
 
 //     // let fh = Arc::new(Mutex::new(file.unwrap()));
-//     let fh_opt =FILE_MAP.lock().unwrap().get(&info.filename).map(|x| x.clone());
+//     let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
 //     if fh_opt.is_none() {
 //         warn!("Cannot find in map {:?}", info.filename);
 //         return HttpResponse::InternalServerError().finish();
@@ -167,7 +183,7 @@ async fn os_wt_recovery_write(info: web::Query<OsWriteInfo>, body: Bytes) -> imp
     // SEe https://docs.rs/actix-web/3.3.2/actix_web/web/struct.Payload.html
 
     // let fh = Arc::new(Mutex::new(file.unwrap()));
-    let fh_opt =FILE_MAP.lock().unwrap().get(&info.filename).map(|x| x.clone());
+    let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
     if fh_opt.is_none() {
         warn!("Cannot find in map: {:?}", info.filename);
         return HttpResponse::InternalServerError()
@@ -175,7 +191,7 @@ async fn os_wt_recovery_write(info: web::Query<OsWriteInfo>, body: Bytes) -> imp
     let fh = fh_opt.unwrap();
 
     let off = info.offset as u64;
-    let guard = fh.lock().unwrap();
+    let guard = fh.read().unwrap();
 
     guard.write_at(body.as_ref(), off).unwrap();
 
@@ -291,11 +307,11 @@ async fn os_wt_recovery_open_file(info: web::Query<OsOpenInfo>) -> impl Responde
     let f2 = file.unwrap();
     println!("len: {:?}", f2.metadata().unwrap().len());
 
-    let fh = Arc::new(Mutex::new(f2));
-    FILE_MAP.lock().unwrap().insert(info.filename.to_string(), fh);
+    let fh = Arc::new(RwLock::new(f2));
+    FILE_MAP.insert(info.filename.to_string(), fh);
 
     // {
-    //     let fh_opt =FILE_MAP.lock().unwrap().get(&info.filename).map(|x| x.clone());
+    //     let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
     //     if fh_opt.is_none() {
     //         warn!("Cannot find in map: {:?}", info.filename);
     //         return HttpResponse::InternalServerError()
@@ -325,7 +341,7 @@ struct OsRenameInfo {
 async fn os_wt_rename_file(info: web::Query<OsRenameInfo>) -> impl Responder {
 
     {
-        let fh_opt =FILE_MAP.lock().unwrap().remove(&info.from).map(|x| x.clone());
+        let fh_opt =FILE_MAP.remove(&info.from).map(|x| x.clone());
         if fh_opt.is_none() {
             warn!("Cannot find in map: {:?}", info.from);
             return HttpResponse::InternalServerError()
@@ -352,8 +368,8 @@ async fn os_wt_rename_file(info: web::Query<OsRenameInfo>) -> impl Responder {
     let f2 = file.unwrap();
     println!("len: {:?}", f2.metadata().unwrap().len());
 
-    let fh = Arc::new(Mutex::new(f2));
-    FILE_MAP.lock().unwrap().insert(info.to.to_string(), fh);
+    let fh = Arc::new(RwLock::new(f2));
+    FILE_MAP.insert(info.to.to_string(), fh);
 
     HttpResponse::Ok()
 
@@ -367,7 +383,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
-            .wrap(Logger::default())
+            // .wrap(Logger::default())
             // .wrap(Logger::new("%a %{User-Agent}i"))
             .route("/", web::get().to(greet))
             // .route("/{name}", web::get().to(greet))
@@ -377,6 +393,9 @@ async fn main() -> std::io::Result<()> {
             .service(os_wt_recovery_open_file)
             .service(os_wt_rename_file)
     })
+    .workers(100)
+    .keep_alive(actix_http::KeepAlive::Os)
+    //.keep_alive(120)
     .bind(("127.0.0.1", 8080))?
     .run()
     .await
