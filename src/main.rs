@@ -3,7 +3,6 @@ use actix_web::{get,post,web, App, HttpRequest, HttpServer, HttpResponse, Respon
 use actix_web::web::Bytes;
 use serde::Deserialize;
 
-use actix_web::middleware::Logger;
 use env_logger::Env;
 use log::{info, warn};
 
@@ -13,7 +12,7 @@ use log::{info, warn};
 use bson::{Array, Bson, Document};
 use bson::doc;
 
-use std::fs::{File, OpenOptions};
+use std::fs::{OpenOptions};
 // use std::io::{Write, BufReader, BufRead};
 
 use std::io;
@@ -28,17 +27,17 @@ use std::os::unix::prelude::FileExt;
 use dashmap::{DashMap};
 use actix_http;
 
-use tokio::time::{delay_for, Duration};
-use urandom::distributions::{Distribution, Uniform};
+// use tokio::time::{delay_for, Duration};
+use urandom::distributions::{Uniform};
 // use urandom::urandom;
 use urandom::Random;
 
-#[macro_use]
+// #[macro_use]
 extern crate structopt;
 extern crate clap_verbosity_flag;
 use structopt::StructOpt;
 
-#[macro_use]
+// #[macro_use]
 extern crate log;
 
 lazy_static! {
@@ -70,38 +69,38 @@ struct OsReadInfo {
     length:i64,
 }
 
-// MongoDB 4.0 protocol
+// MongoDB 4.0, 4.4 protocol
 #[get("/os_read")]
-async fn os_read_40(info: web::Query<OsReadInfo>) -> impl Responder {
+async fn os_read(info: web::Query<OsReadInfo>) -> impl Responder {
 
 
     // let fh = Arc::new(Mutex::new(file.unwrap()));
     let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
     let fh = if fh_opt.is_none() {
-        warn!("Cannot find in map {:?}", info.filename);
+        warn!("read: Cannot find in map {:?}", info.filename);
 
         let full_path = Path::new(&ROOT_PATH.as_str()).join(&info.filename);
 
         // Wiredtiger opens the journal as a "file", just ignore WT
         if full_path.is_dir() {
-            warn!("Opening directory {:?}", full_path);
+            warn!("read: Opening directory {:?}", full_path);
             return HttpResponse::Ok().finish();
         }
 
         if !full_path.exists() {
-            warn!("Creating file {:?}", full_path);
+            warn!("read: Creating file {:?}", full_path);
         }
 
-        info!("Opened file: {:?} at '{:?}'", info.filename, full_path);
+        info!("read: Opened file: {:?} at '{:?}'", info.filename, full_path);
 
         let file = OpenOptions::new().read(true).write(true).create(true).open(full_path);
         if file.is_err() {
-            warn!("Cannot open file {:?}", file);
+            warn!("read: Cannot open file {:?}", file);
             return HttpResponse::InternalServerError().finish();
         }
 
         let f2 = file.unwrap();
-        println!("len: {:?}", f2.metadata().unwrap().len());
+        println!("read: len: {:?}", f2.metadata().unwrap().len());
 
         let fh = Arc::new(RwLock::new(f2));
         FILE_MAP.insert(info.filename.to_string(), fh.clone());
@@ -119,7 +118,7 @@ async fn os_read_40(info: web::Query<OsReadInfo>) -> impl Responder {
 
     let r = guard.read_at(&mut buf, off);
     if r.is_err() {
-        warn!("Cannot read file {:?}", r);
+        warn!("read: Cannot read file {:?}", r);
         return HttpResponse::InternalServerError().finish();
     }
 
@@ -136,39 +135,39 @@ async fn os_read_40(info: web::Query<OsReadInfo>) -> impl Responder {
 }
 
 
-// MongoDB 4.4 protocol
-#[get("/os_read")]
-async fn os_read_44(info: web::Query<OsReadInfo>) -> impl Responder {
+// // MongoDB 4.4 protocol
+// #[get("/os_read")]
+// async fn os_read_44(info: web::Query<OsReadInfo>) -> impl Responder {
 
 
-    // let fh = Arc::new(Mutex::new(file.unwrap()));
-    let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
-    if fh_opt.is_none() {
-        warn!("Cannot find in map {:?}", info.filename);
-        return HttpResponse::InternalServerError().finish();
-    }
-    let fh = fh_opt.unwrap();
+//     // let fh = Arc::new(Mutex::new(file.unwrap()));
+//     let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
+//     if fh_opt.is_none() {
+//         warn!("Cannot find in map {:?}", info.filename);
+//         return HttpResponse::InternalServerError().finish();
+//     }
+//     let fh = fh_opt.unwrap();
 
-    // fh.
+//     // fh.
 
 
-    let mut buf = Vec::new();
-    buf.resize(info.length as usize, 0);
+//     let mut buf = Vec::new();
+//     buf.resize(info.length as usize, 0);
 
-    let off = info.offset as u64;
-    let guard = fh.read().unwrap();
+//     let off = info.offset as u64;
+//     let guard = fh.read().unwrap();
 
-    let r = guard.read_at(&mut buf, off);
-    if r.is_err() {
-        warn!("Cannot read file {:?}", r);
-        return HttpResponse::InternalServerError().finish();
-    }
+//     let r = guard.read_at(&mut buf, off);
+//     if r.is_err() {
+//         warn!("Cannot read file {:?}", r);
+//         return HttpResponse::InternalServerError().finish();
+//     }
 
-    let rs = r.unwrap();
-    info!("Read {:?} bytes", rs);
+//     let rs = r.unwrap();
+//     info!("Read {:?} bytes", rs);
 
-    HttpResponse::Ok().body(web::Bytes::copy_from_slice(buf.as_slice()))
-}
+//     HttpResponse::Ok().body(web::Bytes::copy_from_slice(buf.as_slice()))
+// }
 
 
 // const std::string url = str::stream()
@@ -193,10 +192,12 @@ async fn os_wt_recovery_write_44(info: web::Query<OsWriteInfo>, body: Bytes) -> 
     // let fh = Arc::new(Mutex::new(file.unwrap()));
     let fh_opt =FILE_MAP.get(&info.filename).map(|x| x.clone());
     if fh_opt.is_none() {
-        warn!("Cannot find in map: {:?}", info.filename);
+        warn!("write: Cannot find in map: {:?}", info.filename);
         return HttpResponse::InternalServerError()
     }
     let fh = fh_opt.unwrap();
+
+    // TODO: validate body.length == length
 
     let off = info.offset as u64;
     let guard = fh.read().unwrap();
@@ -233,7 +234,7 @@ fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(&DirEntry)) -> io::Result<()> {
 // Must return BSON ( files : [ {filename:"", fileSize:123},...])
 #[get("/os_list")]
 async fn os_list(info: web::Query<OsListInfo>) -> impl Responder {
-    //format!("Hello Foo {}!", &info.snapshotId);
+    format!("Hello Foo {}!", &info.snapshot_id);
 
     let mut doc = Document::new();
     doc.insert("ok".to_string(), true);
@@ -295,25 +296,25 @@ async fn os_wt_recovery_open_file_44(info: web::Query<OsOpenInfo>) -> impl Respo
 
     // Wiredtiger opens the journal as a "file", just ignore WT
     if full_path.is_dir() {
-        warn!("Opening directory {:?}", full_path);
+        warn!("open: Opening directory {:?}", full_path);
    return HttpResponse::Ok();
     }
 
     if !full_path.exists() {
-        warn!("Creating file {:?}", full_path);
+        warn!("open: Creating file {:?}", full_path);
     }
 
 
-    info!("Opened file: {:?} at '{:?}'", info.filename, full_path);
+    info!("open: Opened file: {:?} at '{:?}'", info.filename, full_path);
 
     let file = OpenOptions::new().read(true).write(true).create(true).open(full_path);
     if file.is_err() {
-        warn!("Cannot open file {:?}", file);
+        warn!("open: Cannot open file {:?}", file);
         return HttpResponse::InternalServerError();
     }
 
     let f2 = file.unwrap();
-    println!("len: {:?}", f2.metadata().unwrap().len());
+    println!("open: len: {:?}", f2.metadata().unwrap().len());
 
     let fh = Arc::new(RwLock::new(f2));
     FILE_MAP.insert(info.filename.to_string(), fh);
@@ -351,30 +352,31 @@ async fn os_wt_rename_file_44(info: web::Query<OsRenameInfo>) -> impl Responder 
     {
         let fh_opt =FILE_MAP.remove(&info.from).map(|x| x.clone());
         if fh_opt.is_none() {
-            warn!("Cannot find in map: {:?}", info.from);
-            return HttpResponse::InternalServerError()
+            // Note: this is often expected since WT may not open the file
+            // But in cases of the journal do a blind rename of preplog to log
+            warn!("Rename: Cannot find in map: {:?}", info.from);
+            // return HttpResponse::InternalServerError()
         }
-        let fh = fh_opt.unwrap();
     }
 
     let from_full = Path::new(&ROOT_PATH.as_str()).join(&info.from);
     let to_full = Path::new(&ROOT_PATH.as_str()).join(&info.to);
-    info!("Renaming : {:?} - {:?}", from_full, to_full);
+    info!("rename: Renaming : {:?} - {:?}", from_full, to_full);
     let r = fs::rename(&from_full, &to_full);
     if r.is_err() {
-        warn!("Cannot rename: {:?} - {:?}", from_full, to_full);
+        warn!("rename: Cannot rename: {:?} - {:?}", from_full, to_full);
         return HttpResponse::InternalServerError()
     }
 
 
     let file = OpenOptions::new().read(true).write(true).create(true).open(to_full);
     if file.is_err() {
-        warn!("Cannot open file {:?}", file);
+        warn!("rename: Cannot open file {:?}", file);
         return HttpResponse::InternalServerError();
     }
 
     let f2 = file.unwrap();
-    println!("len: {:?}", f2.metadata().unwrap().len());
+    println!("rename: len: {:?}", f2.metadata().unwrap().len());
 
     let fh = Arc::new(RwLock::new(f2));
     FILE_MAP.insert(info.to.to_string(), fh);
@@ -386,13 +388,9 @@ async fn os_wt_rename_file_44(info: web::Query<OsRenameInfo>) -> impl Responder 
 
 #[get("/test_close")]
 async fn test_close() -> impl Responder {
-
-
     HttpResponse::Ok().force_close().finish()
 
 }
-
-
 
 
 /// Search for a pattern in a file and display the lines that contain it.
@@ -406,9 +404,9 @@ struct CmdLine {
     /// Debug output
     debug: bool,
 
-    #[structopt(name = "use44", long = "use44")]
-    /// Use the MongoDB 4.4 version of the protocol
-    use44 : bool,
+    // #[structopt(name = "use44", long = "use44")]
+    // /// Use the MongoDB 4.4 version of the protocol
+    // use44 : bool,
 }
 
 
@@ -416,27 +414,31 @@ struct CmdLine {
 async fn main() -> std::io::Result<()> {
     env_logger::from_env(Env::default().default_filter_or("debug")).init();
 
-    let args = CmdLine::from_args();
-    let use44 = args.use44;
+    // let args = CmdLine::from_args();
+    // let use44 = args.use44;
+    // let verbose_log = args.verbose.log_level().unwrap_or(log::Level::Warn) >= log::Level::Info;
 
     HttpServer::new(move || {
-        let app = App::new()
-            .wrap(Logger::default())
-            // .wrap(Logger::new("%a %{User-Agent}i"))
-            .route("/", web::get().to(greet))
-            // .route("/{name}", web::get().to(greet))
-            .service(os_list)
-            .service(test_close)
-            ;
+       App::new()
+        .app_data(web::PayloadConfig::new(1000000 * 2)) // Allow WT to post 1 MB+
+                  // .wrap(Logger::new("%a %{User-Agent}i"))
+                  .route("/", web::get().to(greet))
+                  .route("/hi", web::get().to(greet))
+                  .route("/bye", web::get().to(greet))
+                  // .route("/{name}", web::get().to(greet)) // conflicts all other handlers
+                  .service(os_list)
+                  .service(test_close)
+                  .service(os_wt_recovery_write_44)
+                  .service(os_wt_recovery_open_file_44)
+                  .service(os_wt_rename_file_44)
+                  .service(os_read)
 
-        if use44 {
-            app.service(os_read_44)
-            .service(os_wt_recovery_write_44)
-            .service(os_wt_recovery_open_file_44)
-            .service(os_wt_rename_file_44)
-        } else {
-            app.service(os_read_40)
-        }
+                  // if  verbose_log {
+                  //     app.wrap(Logger::default())
+                  // } else {
+                  //     app
+                  // }
+
     })
     .workers(100)
     .keep_alive(actix_http::KeepAlive::Os)
