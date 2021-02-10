@@ -6,6 +6,7 @@ use log::{error, info, warn};
 #[macro_use]
 extern crate structopt;
 extern crate clap_verbosity_flag;
+use stopwatch::Stopwatch;
 use structopt::StructOpt;
 
 #[macro_use]
@@ -193,6 +194,8 @@ pub async fn main() {
 
     let mut tasks = Vec::new();
 
+    let sw = Stopwatch::start_new();
+
     for i in 0..args.threads {
         let a1 = args.clone();
         let offset: u64 = (i as u64) * args.docs;
@@ -202,7 +205,7 @@ pub async fn main() {
             let mut dg = DataGeneratorParams::from_args(a1.as_ref());
 
             if a1.shard {
-                dg.database = format!("load{}", i);
+                dg.collection = format!("load{}", i);
             }
 
             let r = do_work(dg, offset).await;
@@ -220,6 +223,10 @@ pub async fn main() {
         let out = handle.await.unwrap();
         println!("GOT {:?}", out);
     }
+
+    let elapsed = sw.elapsed();
+
+    println!("Load Duration: {:?}", elapsed);
 }
 
 /*
